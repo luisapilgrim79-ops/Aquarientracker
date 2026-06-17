@@ -5,8 +5,9 @@ import os
 from datetime import date
 import io
 
-# Dateiname für die "Datenbank"
+# Dateinamen für die "Datenbanken"
 DATA_FILE = "aquarium_daten.csv"
+NAMES_FILE = "aquarien_liste.txt"
 
 # Farbschema für die Parameter festlegen
 FARB_MAP = {
@@ -28,11 +29,27 @@ def berechne_co2(ph, kh):
             return 0.0
     return 0.0
 
-# 1. Daten laden oder neu erstellen
+# --- AQUARIEN-LISTE LADEN ODER INITIALISIEREN ---
+def lade_aquarien():
+    if os.path.exists(NAMES_FILE):
+        with open(NAMES_FILE, "r", encoding="utf-8") as f:
+            namen = [line.strip() for line in f.readlines() if line.strip()]
+        if namen:
+            return namen
+    # Standardwerte, falls die Datei leer ist oder nicht existiert
+    return ["Aquarium 1", "Aquarium 2"]
+
+def speichere_aquarien(namen_liste):
+    with open(NAMES_FILE, "w", encoding="utf-8") as f:
+        for name in namen_liste:
+            f.write(f"{name}\n")
+
+aquarien_optionen = lade_aquarien()
+
+# --- WASSERWERTE-DATEN LADEN ---
 if os.path.exists(DATA_FILE):
     df = pd.read_csv(DATA_FILE)
     df['Datum'] = pd.to_datetime(df['Datum'])
-    # Falls die Temperatur noch in einer alten CSV existiert, werfen wir sie hier für die Anzeige raus
     if "Temperatur" in df.columns:
         df = df.drop(columns=["Temperatur"])
 else:
@@ -48,7 +65,8 @@ st.title("🐟 Aquarien Wasserwerte Tracker Pro")
 st.sidebar.header("📝 Neue Werte eintragen")
 
 eingabe_datum = st.sidebar.date_input("Datum", date.today())
-eingabe_aquarium = st.sidebar.selectbox("Aquarium auswählen", ["Aquarium 1", "Aquarium 2"])
+# Hier nutzen wir nun die dynamische Liste
+eingabe_aquarium = st.sidebar.selectbox("Aquarium auswählen", aquarien_optionen)
 
 # Letzte Werte als Voreinstellung suchen
 df_aquarium_aktuell = df[df["Aquarium"] == eingabe_aquarium]
@@ -102,7 +120,7 @@ if st.sidebar.button("Werte speichern"):
 if df.empty:
     st.info("Noch keine Daten vorhanden. Trage links in der Seitenleiste deine ersten Werte ein!")
 else:
-    modus = st.radio("Ansichtsmodus:", ["Einzelansicht", "Direkter Vergleich (Beide Aquarien)"], horizontal=True)
+    modus = st.radio("Ansichtsmodus:", ["Einzelansicht", "Direkter Vergleich (Alle Aquarien)"], horizontal=True)
 
     parameter_liste = ["pH", "Nitrit", "Nitrat", "Ammonium", "KH", "GH", "CO2"]
     ausgewaehlte_parameter = st.multiselect("Welche Werte möchtest du im Graphen sehen? (Mehrfachauswahl möglich)", options=parameter_liste, default=["pH"])
@@ -111,7 +129,8 @@ else:
         st.warning("Bitte wähle mindestens einen Wert aus, um den Graphen anzuzeigen.")
     else:
         if modus == "Einzelansicht":
-            aquarium_auswahl = st.selectbox("Wähle das Aquarium für die Detailansicht:", ["Aquarium 1", "Aquarium 2"])
+            # Nutzt jetzt ebenfalls die dynamische Auswahlliste
+            aquarium_auswahl = st.selectbox("Wähle das Aquarium für die Detailansicht:", aquarien_optionen)
             df_gefiltert = df[df["Aquarium"] == aquarium_auswahl]
 
             if df_gefiltert.empty:
@@ -140,7 +159,8 @@ else:
         use_container_width=True,
         column_config={
             "Datum": st.column_config.DateColumn("Datum", required=True),
-            "Aquarium": st.column_config.SelectboxColumn("Aquarium", options=["Aquarium 1", "Aquarium 2"], required=True),
+            # Das Dropdown im Tabellen-Editor passt sich jetzt ebenfalls automatisch an deine Aquarien an
+            "Aquarium": st.column_config.SelectboxColumn("Aquarium", options=aquarien_optionen, required=True),
             "pH": st.column_config.NumberColumn("pH", min_value=3.0, max_value=10.0, format="%.2f"),
             "Nitrit": st.column_config.NumberColumn("Nitrit", format="%.3f"),
             "CO2": st.column_config.NumberColumn("CO2 (Berechnet)", disabled=True)
@@ -167,8 +187,11 @@ else:
     
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        df_excel[df_excel["Aquarium"] == "Aquarium 1"].to_excel(writer, sheet_name="Aquarium 1", index=False)
-        df_excel[df_excel["Aquarium"] == "Aquarium 2"].to_excel(writer, sheet_name="Aquarium 2", index=False)
+        # Generiert dynamisch für jedes existierende Aquarium ein eigenes Tabellenblatt
+        for aq in aquarien_optionen:
+            df_aq = df_excel[df_excel["Aquarium"] == aq]
+            if not df_aq.empty:
+                df_aq.to_excel(writer, sheet_name=aq[:31], index=False) # Excel erlaubt max. 31 Zeichen pro Tab-Name
         df_excel.to_excel(writer, sheet_name="Alle Daten", index=False)
     
     st.download_button(
@@ -177,3 +200,43 @@ else:
         file_name=f"Aquarium_Wasserwerte_{date.today()}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+# --- NEU: VERWALTUNGSBEREICH GANZ UNTEN ---
+st.markdown("---")
+st.subheader("🛠️ Aquarien verwalten")
+
+col_neu, col_edit = st.columns(2)
+
+with col_neu:
+    st.markdown("**Neues Aquarium hinzufügen**")
+    neues_aq_name = st.text_input("Name des neuen Aquariums", placeholder="z.B. Nano Cube 30L")
+    if st.button("➕ Hinzufügen"):
+        if neues_aq_name.strip():
+            if neues_aq_name.strip() not in aquarien_optionen:
+                aquarien_optionen.append(neues_aq_name.strip())
+                speichere_aquarien(aquarien_optionen)
+                st.success(f"'{neues_aq_name.strip()}' wurde erfolgreich hinzugefügt!")
+                st.rerun()
+            else:
+                st.warning("Ein Aquarium mit diesem Namen existiert bereits.")
+        else:
+            st.error("Bitte gib einen gültigen Namen ein.")
+
+with col_edit:
+    st.markdown("**Bestehendes Aquarium umbenennen**")
+    zu_aendern = st.selectbox("Welches Becken möchtest du umbenennen?", aquarien_optionen)
+    neuer_name = st.text_input("Neuer Name", value=zu_aendern)
+    
+    if st.button("📝 Umbenennen bestätigen"):
+        if neuer_name.strip() and neuer_name.strip() != zu_aendern:
+            # 1. In der Namensliste aktualisieren
+            neue_liste = [neuer_name.strip() if name == zu_aendern else name for name in aquarien_optionen]
+            speichere_aquarien(neue_liste)
+            
+            # 2. In der bestehenden CSV-Datenbank alle alten Einträge umschreiben, damit keine Daten verloren gehen!
+            if not df.empty:
+                df["Aquarium"] = df["Aquarium"].replace(zu_aendern, neuer_name.strip())
+                df.to_csv(DATA_FILE, index=False)
+                
+            st.success(f"Erfolgreich von '{zu_aendern}' in '{neuer_name.strip()}' geändert!")
+            st.rerun()
